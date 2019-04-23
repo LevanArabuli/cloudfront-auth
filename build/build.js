@@ -18,17 +18,17 @@ prompt.get({
       required: true
     },
     method: {
-      description: colors.red("Authentication methods:\n    (1) Google\n    (2) Microsoft\n    (3) GitHub\n    (4) OKTA\n\n    Select an authentication method")
+      description: colors.red("Authentication methods:\n    (1) Google\n    (2) Microsoft\n    (3) GitHub\n    (4) OKTA\n    (5) Auth0\n    (6) Centrify\n\n    Select an authentication method")
     }
   }
 }, function (err, result) {
   config.DISTRIBUTION = result.distribution;
-  shell.mkdir('-p', 'distributions/' + config.DISTRIBUTION);  
+  shell.mkdir('-p', 'distributions/' + config.DISTRIBUTION);
   if (fs.existsSync('distributions/' + config.DISTRIBUTION + '/config.json')) {
     oldConfig = JSON.parse(fs.readFileSync('./distributions/' + config.DISTRIBUTION + '/config.json', 'utf8'));
   }
   if (!fs.existsSync('distributions/' + config.DISTRIBUTION + '/id_rsa') || !fs.existsSync('./distributions/' + config.DISTRIBUTION + '/id_rsa.pub')) {
-    shell.exec("ssh-keygen -t rsa -b 4096 -f ./distributions/" + config.DISTRIBUTION + "/id_rsa -N ''");
+    shell.exec("ssh-keygen -t rsa -m PEM -b 4096 -f ./distributions/" + config.DISTRIBUTION + "/id_rsa -N ''");
     shell.exec("openssl rsa -in ./distributions/" + config.DISTRIBUTION + "/id_rsa -pubout -outform PEM -out ./distributions/" + config.DISTRIBUTION + "/id_rsa.pub");
   }
   switch (result.method) {
@@ -43,7 +43,7 @@ prompt.get({
       if (R.pathOr('', ['AUTHN'], oldConfig) != "MICROSOFT") {
         oldConfig = undefined;
       }
-      config.AUTHN = "MICROSOFT";      
+      config.AUTHN = "MICROSOFT";
       microsoftConfiguration();
       break;
     case '3':
@@ -59,6 +59,20 @@ prompt.get({
       }
       config.AUTHN = "OKTA";
       oktaConfiguration();
+      break;
+    case '5':
+      if (R.pathOr('', ['AUTHN'], oldConfig) != "AUTH0") {
+        oldConfig = undefined;
+      }
+      config.AUTHN = "AUTH0";
+      auth0Configuration();
+      break;
+    case '6':
+      if (R.pathOr('', ['AUTHN'], oldConfig) != "CENTRIFY") {
+        oldConfig = undefined;
+      }
+      config.AUTHN = "CENTRIFY";
+      centrifyConfiguration();
       break;
     default:
       console.log("Method not recognized. Stopping build...");
@@ -103,7 +117,7 @@ function microsoftConfiguration() {
   }, function(err, result) {
     config.PRIVATE_KEY = fs.readFileSync('distributions/' + config.DISTRIBUTION + '/id_rsa', 'utf8');
     config.PUBLIC_KEY = fs.readFileSync('distributions/' + config.DISTRIBUTION + '/id_rsa.pub', 'utf8');
-    config.TENANT = result.TENANT;    
+    config.TENANT = result.TENANT;
     config.DISCOVERY_DOCUMENT = 'https://login.microsoftonline.com/' + result.TENANT + '/.well-known/openid-configuration';
     config.SESSION_DURATION = parseInt(result.SESSION_DURATION, 10) * 60 * 60;
 
@@ -124,13 +138,14 @@ function microsoftConfiguration() {
 
     shell.cp('./authz/microsoft.js', './distributions/' + config.DISTRIBUTION + '/auth.js');
     shell.cp('./authn/openid.index.js', './distributions/' + config.DISTRIBUTION + '/index.js');
+    shell.cp('./nonce.js', './distributions/' + config.DISTRIBUTION + '/nonce.js');
 
     fs.writeFileSync('distributions/' + config.DISTRIBUTION + '/config.json', JSON.stringify(result, null, 4));
 
     switch (result.AUTHZ) {
       case '1':
         shell.cp('./authz/microsoft.js', './distributions/' + config.DISTRIBUTION + '/auth.js');
-        writeConfig(config, zip, ['config.json', 'index.js', 'auth.js']);
+        writeConfig(config, zip, ['config.json', 'index.js', 'auth.js', 'nonce.js']);
         break;
       case '2':
         shell.cp('./authz/microsoft.json-username-lookup.js', './distributions/' + config.DISTRIBUTION + '/auth.js');
@@ -145,7 +160,7 @@ function microsoftConfiguration() {
           }
         }, function (err, result) {
           config.JSON_USERNAME_LOOKUP = result.JSON_USERNAME_LOOKUP;
-          writeConfig(config, zip, ['config.json', 'index.js', 'auth.js']);
+          writeConfig(config, zip, ['config.json', 'index.js', 'auth.js', 'nonce.js']);
         });
         break;
       default:
@@ -213,13 +228,15 @@ function googleConfiguration() {
     config.AUTHZ = result.AUTHZ;
 
     shell.cp('./authn/openid.index.js', './distributions/' + config.DISTRIBUTION + '/index.js');
+    shell.cp('./nonce.js', './distributions/' + config.DISTRIBUTION + '/nonce.js');
 
     fs.writeFileSync('distributions/' + config.DISTRIBUTION + '/config.json', JSON.stringify(result, null, 4));
 
     switch (result.AUTHZ) {
       case '1':
         shell.cp('./authz/google.hosted-domain.js', './distributions/' + config.DISTRIBUTION + '/auth.js');
-        writeConfig(config, zip, ['config.json', 'index.js', 'auth.js']);
+        shell.cp('./nonce.js', './distributions/' + config.DISTRIBUTION + '/nonce.js');
+        writeConfig(config, zip, ['config.json', 'index.js', 'auth.js', 'nonce.js']);
         break;
       case '2':
         shell.cp('./authz/google.json-email-lookup.js', './distributions/' + config.DISTRIBUTION + '/auth.js');
@@ -234,14 +251,14 @@ function googleConfiguration() {
           }
         }, function (err, result) {
           config.JSON_EMAIL_LOOKUP = result.JSON_EMAIL_LOOKUP;
-          writeConfig(config, zip, ['config.json', 'index.js', 'auth.js']);
+          writeConfig(config, zip, ['config.json', 'index.js', 'auth.js', 'nonce.js']);
         });
         break;
       case '3':
         prompt.start();
         prompt.message = colors.blue(">>>");
         prompt.get({
-          properties: { 
+          properties: {
             MOVE: {
               message: colors.red("Place ") + colors.blue("google-authz.json") + colors.red(" file into ") + colors.blue("distributions/" + config.DISTRIBUTION) + colors.red(" folder. Press enter when done")
             }
@@ -255,7 +272,7 @@ function googleConfiguration() {
               console.log('google-authz.json is missing cloudfront_authz_groups. Stopping build...');
             } else {
               shell.cp('./authz/google.groups-lookup.js', './distributions/' + config.DISTRIBUTION + '/auth.js');
-              googleGroupsConfiguration();                    
+              googleGroupsConfiguration();
             }
           }
         });
@@ -338,11 +355,12 @@ function oktaConfiguration() {
     config.AUTHZ = "OKTA";
 
     shell.cp('./authn/openid.index.js', './distributions/' + config.DISTRIBUTION + '/index.js');
+    shell.cp('./nonce.js', './distributions/' + config.DISTRIBUTION + '/nonce.js');
 
     fs.writeFileSync('distributions/' + config.DISTRIBUTION + '/config.json', JSON.stringify(result, null, 4));
 
     shell.cp('./authz/okta.js', './distributions/' + config.DISTRIBUTION + '/auth.js');
-    writeConfig(config, zip, ['config.json', 'index.js', 'auth.js']);
+    writeConfig(config, zip, ['config.json', 'index.js', 'auth.js', 'nonce.js']);
   });
 }
 
@@ -409,6 +427,136 @@ function githubConfiguration() {
       .catch(function(error) {
         console.log("Organization could not be verified. Stopping build... (" + error.message + ")");
       });
+  });
+}
+
+// Auth0 configuration
+function auth0Configuration() {
+  prompt.message = colors.blue(">>");
+  prompt.start();
+  prompt.get({
+    properties: {
+      BASE_URL: {
+        message: colors.red("Base URL"),
+        required: true,
+        default: R.pathOr('', ['BASE_URL'], oldConfig)
+      },
+      CLIENT_ID: {
+        message: colors.red("Client ID"),
+        required: true,
+        default: R.pathOr('', ['AUTH_REQUEST', 'client_id'], oldConfig)
+      },
+      CLIENT_SECRET: {
+        message: colors.red("Client Secret"),
+        required: true,
+        default: R.pathOr('', ['TOKEN_REQUEST', 'client_secret'], oldConfig)
+      },
+      REDIRECT_URI: {
+        message: colors.red("Redirect URI"),
+        required: true,
+        default: R.pathOr('', ['AUTH_REQUEST', 'redirect_uri'], oldConfig)
+      },
+      SESSION_DURATION: {
+        pattern: /^[0-9]*$/,
+        description: colors.red("Session Duration (hours)"),
+        message: colors.green("Entry must only contain numbers"),
+        required: true,
+        default: R.pathOr('', ['SESSION_DURATION'], oldConfig)/60/60
+      }
+    }
+  }, function(err, result) {
+    config.PRIVATE_KEY = fs.readFileSync('distributions/' + config.DISTRIBUTION + '/id_rsa', 'utf8');
+    config.PUBLIC_KEY = fs.readFileSync('distributions/' + config.DISTRIBUTION + '/id_rsa.pub', 'utf8');
+    config.DISCOVERY_DOCUMENT = result.BASE_URL + '/.well-known/openid-configuration';
+    config.SESSION_DURATION = parseInt(result.SESSION_DURATION, 10) * 60 * 60;
+
+    config.BASE_URL = result.BASE_URL;
+    config.CALLBACK_PATH = url.parse(result.REDIRECT_URI).pathname;
+
+    config.AUTH_REQUEST.client_id = result.CLIENT_ID;
+    config.AUTH_REQUEST.response_type = 'code';
+    config.AUTH_REQUEST.scope = 'openid email';
+    config.AUTH_REQUEST.redirect_uri = result.REDIRECT_URI;
+
+    config.TOKEN_REQUEST.client_id = result.CLIENT_ID;
+    config.TOKEN_REQUEST.client_secret = result.CLIENT_SECRET;
+    config.TOKEN_REQUEST.redirect_uri = result.REDIRECT_URI;
+    config.TOKEN_REQUEST.grant_type = 'authorization_code';
+
+    config.AUTHZ = "AUTH0";
+
+    shell.cp('./authn/openid.index.js', './distributions/' + config.DISTRIBUTION + '/index.js');
+    shell.cp('./nonce.js', './distributions/' + config.DISTRIBUTION + '/nonce.js');
+
+    fs.writeFileSync('distributions/' + config.DISTRIBUTION + '/config.json', JSON.stringify(result, null, 4));
+
+    shell.cp('./authz/auth0.js', './distributions/' + config.DISTRIBUTION + '/auth.js');
+    writeConfig(config, zip, ['config.json', 'index.js', 'auth.js', 'nonce.js']);
+  });
+}
+
+// Centrify configuration
+function centrifyConfiguration() {
+  prompt.message = colors.blue(">>");
+  prompt.start();
+  prompt.get({
+    properties: {
+      BASE_URL: {
+        message: colors.red("Base URL"),
+        required: true,
+        default: R.pathOr('', ['BASE_URL'], oldConfig)
+      },
+      CLIENT_ID: {
+        message: colors.red("Client ID"),
+        required: true,
+        default: R.pathOr('', ['AUTH_REQUEST', 'client_id'], oldConfig)
+      },
+      CLIENT_SECRET: {
+        message: colors.red("Client Secret"),
+        required: true,
+        default: R.pathOr('', ['TOKEN_REQUEST', 'client_secret'], oldConfig)
+      },
+      REDIRECT_URI: {
+        message: colors.red("Redirect URI"),
+        required: true,
+        default: R.pathOr('', ['AUTH_REQUEST', 'redirect_uri'], oldConfig)
+      },
+      SESSION_DURATION: {
+        pattern: /^[0-9]*$/,
+        description: colors.red("Session Duration (hours)"),
+        message: colors.green("Entry must only contain numbers"),
+        required: true,
+        default: R.pathOr('', ['SESSION_DURATION'], oldConfig)/60/60
+      }
+    }
+  }, function(err, result) {
+    config.PRIVATE_KEY = fs.readFileSync('distributions/' + config.DISTRIBUTION + '/id_rsa', 'utf8');
+    config.PUBLIC_KEY = fs.readFileSync('distributions/' + config.DISTRIBUTION + '/id_rsa.pub', 'utf8');
+    config.DISCOVERY_DOCUMENT = result.BASE_URL + '/.well-known/openid-configuration';
+    config.SESSION_DURATION = parseInt(result.SESSION_DURATION, 10) * 60 * 60;
+
+    config.BASE_URL = result.BASE_URL;
+    config.CALLBACK_PATH = url.parse(result.REDIRECT_URI).pathname;
+
+    config.AUTH_REQUEST.client_id = result.CLIENT_ID;
+    config.AUTH_REQUEST.response_type = 'code';
+    config.AUTH_REQUEST.scope = 'openid email';
+    config.AUTH_REQUEST.redirect_uri = result.REDIRECT_URI;
+
+    config.TOKEN_REQUEST.client_id = result.CLIENT_ID;
+    config.TOKEN_REQUEST.client_secret = result.CLIENT_SECRET;
+    config.TOKEN_REQUEST.redirect_uri = result.REDIRECT_URI;
+    config.TOKEN_REQUEST.grant_type = 'authorization_code';
+
+    config.AUTHZ = "CENTRIFY";
+
+    shell.cp('./authn/openid.index.js', './distributions/' + config.DISTRIBUTION + '/index.js');
+    shell.cp('./nonce.js', './distributions/' + config.DISTRIBUTION + '/nonce.js');
+
+    fs.writeFileSync('distributions/' + config.DISTRIBUTION + '/config.json', JSON.stringify(result, null, 4));
+
+    shell.cp('./authz/centrify.js', './distributions/' + config.DISTRIBUTION + '/auth.js');
+    writeConfig(config, zip, ['config.json', 'index.js', 'auth.js', 'nonce.js']);
   });
 }
 
